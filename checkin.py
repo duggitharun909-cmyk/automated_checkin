@@ -249,6 +249,16 @@ def run_attendance(
                 if "Check In" in btn_text:
                     log_info("Clicking 'Check In' button with office location...")
                     action_btn.click()
+                    page.wait_for_timeout(1000)
+
+                    # Check if the in-page "Location Access Required" modal appears
+                    allow_modal_btn = page.locator("button:visible", has_text="Allow Now").first
+                    if allow_modal_btn.count() > 0:
+                        log_info("Detected 'Location Access Required' modal. Clicking 'Allow Now'...")
+                        allow_modal_btn.click()
+                        page.wait_for_timeout(3000)
+
+                    # Also wait for any network responses or toast
                     page.wait_for_timeout(2000)
 
                     new_btn_text = ""
