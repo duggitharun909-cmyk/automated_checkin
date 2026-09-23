@@ -3,7 +3,7 @@
 Office Tracker — Automated Check-In & Check-Out Automation with Playwright
 Features:
   - Weekday only (skips Saturday and Sunday)
-  - Randomized time window (between 09:20 AM and 09:40 AM)
+  - Randomized time window (between 09:30 AM and 09:45 AM)
   - Automatic Office Geolocation spoofing (matches TechGy office premises)
   - Safe check-in (prevents duplicate checkout if already working)
 """
@@ -23,16 +23,16 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 load_dotenv()
 
 DEFAULT_URL = os.getenv("PORTAL_URL", "https://office-tracker-1.vercel.app/login")
-DEFAULT_EMAIL = os.getenv("OFFICE_EMAIL", "duggitharun909@gmail.com")
-DEFAULT_PASSWORD = os.getenv("OFFICE_PASSWORD", "Td@2023*")
+DEFAULT_EMAIL = os.getenv("OFFICE_EMAIL")
+DEFAULT_PASSWORD = os.getenv("OFFICE_PASSWORD")
 
 # TechGy Office premises coordinates (reverse engineered from portal geofence)
 DEFAULT_LATITUDE = float(os.getenv("OFFICE_LATITUDE", "17.4835258"))
 DEFAULT_LONGITUDE = float(os.getenv("OFFICE_LONGITUDE", "78.3808618"))
 
 # Window start and end
-WINDOW_START_STR = os.getenv("CHECKIN_WINDOW_START", "09:20")
-WINDOW_END_STR = os.getenv("CHECKIN_WINDOW_END", "09:40")
+WINDOW_START_STR = os.getenv("CHECKIN_WINDOW_START", "09:30")
+WINDOW_END_STR = os.getenv("CHECKIN_WINDOW_END", "09:45")
 
 
 class Style:
@@ -72,7 +72,7 @@ def is_weekend(check_date: datetime = None) -> bool:
 def get_random_checkin_datetime(base_date: datetime = None) -> datetime:
     """
     Generates a unique randomized time between CHECKIN_WINDOW_START and CHECKIN_WINDOW_END
-    (e.g., between 09:20:00 and 09:40:00).
+    (e.g., between 09:30:00 and 09:45:00).
     """
     if base_date is None:
         base_date = datetime.now()
@@ -126,6 +126,13 @@ def run_attendance(
     """
     Automates login and check-in / check-out / status on Office Tracker.
     """
+    if not email or not password:
+        raise SystemExit(
+            "OFFICE_EMAIL / OFFICE_PASSWORD are not set. "
+            "Create a .env file from .env.example (locally) or set them as "
+            "repository secrets (in CI) before running this script."
+        )
+
     now = datetime.now()
     day_name = now.strftime("%A")
 
@@ -411,7 +418,7 @@ def main():
     parser.add_argument(
         "--random-window",
         action="store_true",
-        help="Wait until a randomized time between 09:20 AM and 09:40 AM before checking in"
+        help="Wait until a randomized time between 09:30 AM and 09:45 AM before checking in"
     )
     parser.add_argument(
         "--screenshot-dir",

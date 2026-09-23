@@ -1,0 +1,41 @@
+name: Office Check-In
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Run check-in
+        env:
+          PORTAL_URL: ${{ secrets.PORTAL_URL }}
+          OFFICE_EMAIL: ${{ secrets.OFFICE_EMAIL }}
+          OFFICE_PASSWORD: ${{ secrets.OFFICE_PASSWORD }}
+          OFFICE_LATITUDE: ${{ secrets.OFFICE_LATITUDE }}
+          OFFICE_LONGITUDE: ${{ secrets.OFFICE_LONGITUDE }}
+          CHECKIN_WINDOW_START: ${{ secrets.CHECKIN_WINDOW_START }}
+          CHECKIN_WINDOW_END: ${{ secrets.CHECKIN_WINDOW_END }}
+        run: python checkin.py --action check-in --random-window
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkin-screenshot
+          path: screenshots/*.png
+          retention-days: 14

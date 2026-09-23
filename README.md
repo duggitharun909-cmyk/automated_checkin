@@ -11,7 +11,7 @@ Python Playwright automation script for **TechGy Innovations Office Tracker** (`
    - Runs exclusively on workdays (Monday through Friday).
    - Use `--force` to test or override on weekends if needed.
 
-2. **Randomized Daily Check-In Window (09:20 AM – 09:40 AM)**:
+2. **Randomized Daily Check-In Window (09:30 AM – 09:45 AM)**:
    - Eliminates predictable patterns. Every single day a random time is chosen (e.g. 09:23:41 AM, 09:37:12 AM, 09:28:05 AM).
    - No two days will have the exact same check-in timestamp.
 
@@ -63,17 +63,17 @@ playwright install chromium
 
 ### 2. Configure `.env`
 
-Copy `.env.example` to `.env` if not already present:
+Copy `.env.example` to `.env` and fill in your own values (never commit this file):
 ```env
 PORTAL_URL=https://office-tracker-1.vercel.app/login
-OFFICE_EMAIL=duggitharun909@gmail.com
-OFFICE_PASSWORD=Td@2023*
+OFFICE_EMAIL=your_email@example.com
+OFFICE_PASSWORD=your_password_here
 
 OFFICE_LATITUDE=17.4835258
 OFFICE_LONGITUDE=78.3808618
 
-CHECKIN_WINDOW_START=09:20
-CHECKIN_WINDOW_END=09:40
+CHECKIN_WINDOW_START=09:30
+CHECKIN_WINDOW_END=09:45
 ```
 
 ---
@@ -87,7 +87,7 @@ CHECKIN_WINDOW_END=09:40
 ```
 > Skips Saturday/Sunday automatically. If already checked in, alerts safely.
 
-### 2. Run with Randomized 09:20 – 09:40 AM Window Wait
+### 2. Run with Randomized 09:30 – 09:45 AM Window Wait
 
 ```bash
 .venv/bin/python checkin.py --action check-in --random-window
