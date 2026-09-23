@@ -1,0 +1,22 @@
+# Virtual Environment
+.venv/
+env/
+venv/
+
+# Environment credentials (CRITICAL: Do not commit passwords)
+.env
+.env.local
+
+# Python cache & artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+
+# Screenshots output (ignore actual pngs, keep dir)
+screenshots/*.png
+!screenshots/.gitkeep
+
+# OS generated files
+.DS_Store
+Thumbs.db
