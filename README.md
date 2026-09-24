@@ -15,9 +15,9 @@ Python Playwright automation script for **TechGy Innovations Office Tracker** (`
    - Runs exclusively on workdays (Monday through Friday).
    - Use `--force` to test or override on weekends if needed.
 
-3. **Randomized Daily Check-In Window (09:30 AM – 09:45 AM)**:
-   - Eliminates predictable patterns. Every single day a random time is chosen (e.g. 09:23:41 AM, 09:37:12 AM, 09:28:05 AM).
-   - No two days will have the exact same check-in timestamp. The random time is picked **once per run** and shared by every user, so the whole team checks in together.
+3. **Randomized Daily Check-In Window (09:32 AM – 09:48 AM)**:
+   - Eliminates predictable patterns. Every user gets their own random, unique second inside the window (e.g. alice at 09:34:52 AM, bob at 09:43:46 AM) - never the same instant twice, and never the same as another user.
+   - Each user's thread waits independently for its own assigned time before checking in, so the group still runs in parallel (see `--random-window` below).
 
 4. **Office Location Emulation (Geofencing)**:
    - The portal enforces a 2000m radius check around the office (`Lat 17.4835258`, `Lng 78.3808618`).
@@ -76,8 +76,8 @@ PORTAL_URL=https://office-tracker-1.vercel.app/login
 OFFICE_LATITUDE=17.4835258
 OFFICE_LONGITUDE=78.3808618
 
-CHECKIN_WINDOW_START=09:30
-CHECKIN_WINDOW_END=09:45
+CHECKIN_WINDOW_START=09:32
+CHECKIN_WINDOW_END=09:48
 ```
 
 ### 3. Configure `users.json` (one entry per person)
@@ -104,12 +104,12 @@ In CI (GitHub Actions), skip the file and set an `OFFICE_USERS` secret containin
 ```
 > Skips Saturday/Sunday automatically. If already checked in, alerts safely.
 
-### 2. Run with Randomized 09:30 – 09:45 AM Window Wait
+### 2. Run with Randomized 09:32 – 09:48 AM Window Wait
 
 ```bash
 .venv/bin/python checkin.py --action check-in --random-window
 ```
-> If started before the window, calculates today's random time and waits before checking in.
+> Assigns each user in `users.json` their own unique random time in the window, then waits (per user, in parallel) before checking them in.
 
 ### 3. Check Current Attendance Status
 

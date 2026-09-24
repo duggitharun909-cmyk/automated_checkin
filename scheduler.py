@@ -3,7 +3,7 @@
 Office Tracker — Automated Daily Scheduler
 Features:
   - Automatically skips Saturdays and Sundays
-  - Generates a unique randomized check-in time every weekday between 09:30 AM and 09:45 AM
+  - Generates a unique randomized check-in time every weekday between 09:32 AM and 09:48 AM
   - Ensures a different time every day
   - Injects office geolocation coordinates (TechGy office premises)
   - Runs in background or terminal with countdown logging

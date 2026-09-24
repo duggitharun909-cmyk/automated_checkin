@@ -1,21 +1,23 @@
 # GitHub + cron-jobs.org Setup Guide
 
-Goal: run `checkin.py` automatically every weekday, without your laptop needing to be on. The check-in happens **immediately** whenever the workflow is triggered - there's no internal waiting or randomized window. Whatever time you set in cron-jobs.org is the check-in time.
+Goal: run `checkin.py` automatically every weekday, without your laptop needing to be on. cron-jobs.org triggers the workflow once at **09:30**; each user in `OFFICE_USERS` is then assigned their own random, unique second between **09:32 and 09:48**, and checks in at exactly that moment.
 
 ## How it works
 
 ```
-cron-jobs.org  --(HTTPS POST, at whatever time you configure)-->  GitHub Actions API
+cron-jobs.org  --(HTTPS POST, 09:30)-->  GitHub Actions API
                                                   |
                                                   v
                                     workflow_dispatch triggers checkin.yml
                                                   |
                                                   v
-                              checkin.py runs immediately in the cloud
-                              and performs the check-in for every user
+                    checkin.py --random-window picks one unique random
+                    second per user inside 09:32-09:48, then spins up one
+                    browser thread per user - each thread waits for its own
+                    assigned time, then checks that user in, all in parallel
 ```
 
-GitHub Actions runs Linux/Chromium in the cloud, so headless mode works there without any browser-download issues.
+Triggering at 09:30 (two minutes before the window opens) gives every thread time to launch and settle in before its assigned target. GitHub Actions runs Linux/Chromium in the cloud, so headless mode works there without any browser-download issues.
 
 ---
 
@@ -27,7 +29,7 @@ Your repo `duggitharun909-cmyk/automated_checkin` is currently **public**, and u
 2. Make the repository **private**: repo page -> **Settings** -> scroll to **Danger Zone** -> **Change visibility** -> **Make private**.
 3. (Optional but recommended) Purge the old password from git history with the [`git filter-repo`](https://github.com/newren/git-filter-repo) tool or GitHub's "Remove sensitive data" guide, since a private repo you later make public again (or any collaborator you add) would still see it in old commits. Skip this if the repo will always stay private and only you have access.
 
-The code fix (removing the hardcoded fallback credentials, moving the window to 09:30-09:45) has already been applied locally in this session - see step 2 below to commit and push it.
+The code fix (removing the hardcoded fallback credentials, moving the window to 09:32-09:48, adding per-user unique randomized check-in times) has already been applied locally in this session - see step 2 below to commit and push it.
 
 ---
 
@@ -35,7 +37,7 @@ The code fix (removing the hardcoded fallback credentials, moving the window to 
 
 - `.github/workflows/checkin.yml` - the GitHub Actions workflow that runs `checkin.py` in the cloud.
 - `checkin.py` - no more hardcoded email/password fallback; now fails fast with a clear error if credentials aren't set.
-- `.env`, `.env.example`, `README.md` - window updated to `09:30`-`09:45`, example credentials replaced with placeholders.
+- `.env`, `.env.example`, `README.md` - window updated to `09:32`-`09:48`, example credentials replaced with placeholders.
 
 Review the diff before pushing:
 
@@ -69,6 +71,8 @@ GitHub repo -> **Settings** -> **Secrets and variables** -> **Actions** -> **New
 | `OFFICE_USERS` | see below - one JSON secret holding every account |
 | `OFFICE_LATITUDE` | `17.4835258` |
 | `OFFICE_LONGITUDE` | `78.3808618` |
+| `CHECKIN_WINDOW_START` | `09:32` |
+| `CHECKIN_WINDOW_END` | `09:48` |
 
 **`OFFICE_USERS`** replaces individual email/password secrets now that the script supports multiple accounts, all checked in **in parallel** (see `users.json.example` for the local-dev equivalent). Its value is a single-line JSON array:
 
@@ -87,7 +91,7 @@ Secrets are encrypted, never shown again after saving, and are not visible in lo
 Before wiring up cron-jobs.org, confirm it works on its own:
 
 1. Repo page -> **Actions** tab -> **Office Check-In** workflow -> **Run workflow** -> **Run workflow** (green button).
-2. Watch the run. It should log in and check in immediately for every user in `OFFICE_USERS` - or report "Already Checked In" per user if already checked in.
+2. Watch the run. The log will print each user's assigned random time up front, then each user's thread waits until its own moment and checks in - or reports "Already Checked In" if already checked in. If you run this test outside 09:32-09:48, the assigned times may already be in the past, in which case each thread proceeds immediately - that's expected for a manual test run outside the window, not a bug.
 3. Open the run -> **checkin-screenshot** artifact to download each user's screenshot and confirm visually.
 
 If it fails, click into the failed step and read the error - almost always a missing/incorrect secret.
@@ -128,7 +132,7 @@ Store it somewhere safe (password manager). Treat it like a password.
    ```json
    {"ref":"main"}
    ```
-8. **Schedule**: every weekday (Mon-Fri), once daily at whatever time you want the check-in to actually happen (e.g. **09:35**) - set the timezone explicitly in cron-jobs.org's settings (e.g. `Asia/Kolkata`) so it doesn't default to UTC. This is the real check-in time now, not a buffer before one - there's no waiting once the workflow starts.
+8. **Schedule**: every weekday (Mon-Fri), once daily at **09:30** - set the timezone explicitly in cron-jobs.org's settings (e.g. `Asia/Kolkata`) so it doesn't default to UTC. 09:30 is just the trigger; actual check-ins happen at each user's own randomly-assigned second between 09:32 and 09:48.
 9. Save and enable the job.
 
 A successful trigger returns HTTP `204 No Content` with an empty body - that's correct, not an error. cron-jobs.org's execution history will show the response code for each run so you can confirm it's firing.
@@ -149,5 +153,7 @@ A successful trigger returns HTTP `204 No Content` with an empty body - that's c
 
 - **Weekends are already handled** - `checkin.py` skips Saturday/Sunday on its own, so it's safe to just leave the cron-jobs.org schedule running Mon-Fri (or even 7 days a week as a backup - the weekend guard will just skip and exit cleanly).
 - **Already-checked-in is safe** - the script detects an existing "Working" status and won't double check-in or accidentally check you out.
+- **Unique per-user times** - each run picks a distinct random second per user from the window, so two users never land on the exact same instant. If you ever have more users than seconds in the window (not realistic for a small team), widen `CHECKIN_WINDOW_START`/`CHECKIN_WINDOW_END`.
+- **Workflow timeout** - set to 25 minutes, comfortably covering the ~18-minute worst case wait (trigger at 09:30, latest assigned time near 09:48) plus setup and login time. If you widen the window further, increase `timeout-minutes` in `checkin.yml` to match.
 - **Token expiry** - fine-grained PATs expire; when yours does, the cron-jobs.org job will start getting `401 Unauthorized` responses. Generate a new token and update the `Authorization` header in the cron-jobs.org job.
 - **`scheduler.py`** (the local daemon) and this GitHub Actions setup do the same job in two different places. Once the cloud version is verified working, you can stop running `scheduler.py` locally to avoid double check-ins.

@@ -4,7 +4,8 @@ Office Tracker — Automated Check-In & Check-Out Automation with Playwright
 Features:
   - Multiple users, checked in concurrently (see users.json.example)
   - Weekday only (skips Saturday and Sunday)
-  - Randomized time window (between 09:30 AM and 09:45 AM), shared by all users
+  - Each user gets their own random, unique check-in second inside the window
+    (default 09:32-09:48); every user's thread waits for its own time, then acts
   - Automatic Office Geolocation spoofing (matches TechGy office premises)
   - Safe check-in (prevents duplicate checkout if already working)
 """
@@ -32,8 +33,8 @@ DEFAULT_LATITUDE = float(os.getenv("OFFICE_LATITUDE", "17.4835258"))
 DEFAULT_LONGITUDE = float(os.getenv("OFFICE_LONGITUDE", "78.3808618"))
 
 # Window start and end
-WINDOW_START_STR = os.getenv("CHECKIN_WINDOW_START", "09:30")
-WINDOW_END_STR = os.getenv("CHECKIN_WINDOW_END", "09:45")
+WINDOW_START_STR = os.getenv("CHECKIN_WINDOW_START", "09:32")
+WINDOW_END_STR = os.getenv("CHECKIN_WINDOW_END", "09:48")
 
 
 class Style:
@@ -113,10 +114,11 @@ def is_weekend(check_date: datetime = None) -> bool:
     return check_date.weekday() in (5, 6)
 
 
-def get_random_checkin_datetime(base_date: datetime = None) -> datetime:
+def assign_unique_checkin_times(count: int, base_date: datetime = None) -> list:
     """
-    Generates a unique randomized time between CHECKIN_WINDOW_START and CHECKIN_WINDOW_END
-    (e.g., between 09:30:00 and 09:45:00).
+    Picks `count` distinct random seconds inside CHECKIN_WINDOW_START-CHECKIN_WINDOW_END
+    (e.g., 09:32:00-09:48:00) and returns them as datetimes for base_date's day - one per
+    user, so no two users land on the exact same second.
     """
     if base_date is None:
         base_date = datetime.now()
@@ -126,33 +128,20 @@ def get_random_checkin_datetime(base_date: datetime = None) -> datetime:
 
     start_seconds = sh * 3600 + sm * 60
     end_seconds = eh * 3600 + em * 60
+    window_size = end_seconds - start_seconds + 1
 
-    # Pick a random second in the window
-    random_sec = random.randint(start_seconds, end_seconds)
-    target_h = random_sec // 3600
-    target_m = (random_sec % 3600) // 60
-    target_s = random_sec % 60
+    if count > window_size:
+        raise SystemExit(
+            f"Check-in window ({WINDOW_START_STR}-{WINDOW_END_STR}) only has {window_size} "
+            f"distinct seconds, not enough to assign {count} unique user times. "
+            "Widen CHECKIN_WINDOW_START/CHECKIN_WINDOW_END."
+        )
 
-    return base_date.replace(hour=target_h, minute=target_m, second=target_s, microsecond=0)
-
-
-def wait_for_random_window():
-    """
-    Waits until the randomized daily window if currently before the window.
-    Called once per run (not per user), so every user hits the portal together.
-    """
-    now = datetime.now()
-    target = get_random_checkin_datetime(now)
-
-    log_schedule(f"Today's randomized target check-in time: {Style.BOLD}{target.strftime('%I:%M:%S %p')}{Style.RESET}")
-
-    if now < target:
-        wait_seconds = (target - now).total_seconds()
-        log_schedule(f"Waiting {int(wait_seconds // 60)}m {int(wait_seconds % 60)}s until target time...")
-        time.sleep(wait_seconds)
-        log_schedule("Target time reached! Proceeding with check-in...")
-    else:
-        log_info(f"Current time ({now.strftime('%I:%M:%S %p')}) is past or inside the randomized target window ({target.strftime('%I:%M:%S %p')}). Proceeding immediately.")
+    chosen_seconds = random.sample(range(start_seconds, end_seconds + 1), count)
+    return [
+        base_date.replace(hour=s // 3600, minute=(s % 3600) // 60, second=s % 60, microsecond=0)
+        for s in chosen_seconds
+    ]
 
 
 def perform_action(
@@ -166,13 +155,24 @@ def perform_action(
     slow_mo: int,
     screenshot_dir: str,
     label: str,
+    wait_until: datetime = None,
 ) -> dict:
     """
     Runs one browser session: login + check-in / check-out / status, for a single user.
     Safe to run concurrently with other calls to this function (each gets its own browser).
+    If `wait_until` is set, sleeps until that exact moment before doing anything else -
+    each thread waits for its own target time independently.
     """
     logger = Logger(label)
     safe_label = re.sub(r"[^A-Za-z0-9_.-]", "_", label)
+
+    if wait_until:
+        now = datetime.now()
+        if now < wait_until:
+            wait_seconds = (wait_until - now).total_seconds()
+            logger.info(f"Assigned check-in time: {Style.BOLD}{wait_until.strftime('%I:%M:%S %p')}{Style.RESET} (waiting {int(wait_seconds // 60)}m {int(wait_seconds % 60)}s)...")
+            time.sleep(wait_seconds)
+        logger.info(f"Target time reached ({datetime.now().strftime('%I:%M:%S %p')}). Proceeding...")
 
     screenshots_path = Path(screenshot_dir)
     screenshots_path.mkdir(parents=True, exist_ok=True)
@@ -401,8 +401,10 @@ def run_attendance(
     max_workers: int = None,
 ) -> dict:
     """
-    Runs the given action for every user in `users`, in parallel (one browser per user),
-    so everyone checks in together instead of one-by-one.
+    Runs the given action for every user in `users`, in parallel (one browser per user).
+    When `random_window` is set, each user is assigned their own random, unique second
+    inside the check-in window, and their thread waits independently for it - so everyone
+    still checks in around the same window, but not at an identical, easily-flagged instant.
     """
     if not users:
         raise SystemExit(
@@ -424,9 +426,14 @@ def run_attendance(
             "results": [],
         }
 
-    # 2. Random Time Window Guard (waited once, shared by every user)
+    # 2. Assign each user their own unique random target time in the window
     if action == "check-in" and random_window and not force:
-        wait_for_random_window()
+        targets = assign_unique_checkin_times(len(users), now)
+        log_schedule(f"Assigned unique check-in times within {WINDOW_START_STR}-{WINDOW_END_STR}:")
+        for u, t in zip(users, targets):
+            log_schedule(f"  {u['name']}: {Style.BOLD}{t.strftime('%I:%M:%S %p')}{Style.RESET}")
+    else:
+        targets = [None] * len(users)
 
     log_info(f"Running '{action}' for {len(users)} user(s) in parallel...")
 
@@ -445,8 +452,9 @@ def run_attendance(
                 slow_mo=slow_mo,
                 screenshot_dir=screenshot_dir,
                 label=u["name"],
+                wait_until=t,
             ): u
-            for u in users
+            for u, t in zip(users, targets)
         }
         for future in as_completed(future_to_user):
             u = future_to_user[future]
@@ -519,7 +527,7 @@ def main():
     parser.add_argument(
         "--random-window",
         action="store_true",
-        help="Wait until a randomized time between 09:30 AM and 09:45 AM before checking in"
+        help="Assign each user their own unique random time between 09:32 AM and 09:48 AM and wait for it before checking them in"
     )
     parser.add_argument(
         "--screenshot-dir",
