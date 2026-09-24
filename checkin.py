@@ -26,15 +26,15 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 # Load configuration from .env file
 load_dotenv()
 
-DEFAULT_URL = os.getenv("PORTAL_URL", "https://office-tracker-1.vercel.app/login")
+DEFAULT_URL = os.getenv("PORTAL_URL") or "https://office-tracker-1.vercel.app/login"
 
 # TechGy Office premises coordinates (reverse engineered from portal geofence)
-DEFAULT_LATITUDE = float(os.getenv("OFFICE_LATITUDE", "17.4835258"))
-DEFAULT_LONGITUDE = float(os.getenv("OFFICE_LONGITUDE", "78.3808618"))
+DEFAULT_LATITUDE = float(os.getenv("OFFICE_LATITUDE") or "17.4835258")
+DEFAULT_LONGITUDE = float(os.getenv("OFFICE_LONGITUDE") or "78.3808618")
 
 # Window start and end
-WINDOW_START_STR = os.getenv("CHECKIN_WINDOW_START", "09:32")
-WINDOW_END_STR = os.getenv("CHECKIN_WINDOW_END", "09:48")
+WINDOW_START_STR = os.getenv("CHECKIN_WINDOW_START") or "09:32"
+WINDOW_END_STR = os.getenv("CHECKIN_WINDOW_END") or "09:48"
 
 
 class Style:
