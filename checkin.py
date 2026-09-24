@@ -36,6 +36,12 @@ DEFAULT_LONGITUDE = float(os.getenv("OFFICE_LONGITUDE") or "78.3808618")
 WINDOW_START_STR = os.getenv("CHECKIN_WINDOW_START") or "09:32"
 WINDOW_END_STR = os.getenv("CHECKIN_WINDOW_END") or "09:48"
 
+# Safety cap: refuse to start waiting if it would take longer than this (likely misconfiguration)
+MAX_WAIT_MINUTES = int(os.getenv("MAX_WAIT_MINUTES") or "30")
+
+# How often to print a "still waiting" countdown line while a user's thread waits
+WAIT_LOG_INTERVAL_SECONDS = 60
+
 
 class Style:
     RESET = "\033[0m"
@@ -171,7 +177,14 @@ def perform_action(
         if now < wait_until:
             wait_seconds = (wait_until - now).total_seconds()
             logger.info(f"Assigned check-in time: {Style.BOLD}{wait_until.strftime('%I:%M:%S %p')}{Style.RESET} (waiting {int(wait_seconds // 60)}m {int(wait_seconds % 60)}s)...")
-            time.sleep(wait_seconds)
+
+            remaining = wait_seconds
+            while remaining > 0:
+                chunk = min(WAIT_LOG_INTERVAL_SECONDS, remaining)
+                time.sleep(chunk)
+                remaining -= chunk
+                if remaining > 0:
+                    logger.info(f"Still waiting for {wait_until.strftime('%I:%M:%S %p')}... {int(remaining // 60)}m {int(remaining % 60)}s remaining")
         logger.info(f"Target time reached ({datetime.now().strftime('%I:%M:%S %p')}). Proceeding...")
 
     screenshots_path = Path(screenshot_dir)
@@ -428,6 +441,25 @@ def run_attendance(
 
     # 2. Assign each user their own unique random target time in the window
     if action == "check-in" and random_window and not force:
+        eh, em = map(int, WINDOW_END_STR.split(":"))
+        window_end = now.replace(hour=eh, minute=em, second=0, microsecond=0)
+        max_possible_wait_min = max(0, (window_end - now).total_seconds() / 60)
+
+        if max_possible_wait_min > MAX_WAIT_MINUTES:
+            log_error(
+                f"Refusing to start: the check-in window ends at {WINDOW_END_STR}, which is "
+                f"{int(max_possible_wait_min)} minute(s) away from now ({now.strftime('%I:%M:%S %p')}) - "
+                f"over the {MAX_WAIT_MINUTES}-minute safety cap. This usually means the workflow was "
+                "triggered too early or the window is misconfigured. Fix the trigger time / "
+                "CHECKIN_WINDOW_START-END, or pass --force to bypass this check."
+            )
+            return {
+                "success": False,
+                "status": "Aborted (wait too long)",
+                "message": f"Would need to wait up to {int(max_possible_wait_min)}m, over the {MAX_WAIT_MINUTES}m cap. Timer not started.",
+                "results": [],
+            }
+
         targets = assign_unique_checkin_times(len(users), now)
         log_schedule(f"Assigned unique check-in times within {WINDOW_START_STR}-{WINDOW_END_STR}:")
         for u, t in zip(users, targets):
