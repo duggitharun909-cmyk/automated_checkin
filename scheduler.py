@@ -16,6 +16,7 @@ import sys
 import time
 from checkin import (
     run_attendance,
+    load_users,
     is_weekend,
     WINDOW_START_STR,
     WINDOW_END_STR,
@@ -104,7 +105,9 @@ def start_scheduler(headed: bool = False):
         # Trigger check-in
         print(f"\n{Style.GREEN}{Style.BOLD}[ALARM]{Style.RESET} Check-in time reached ({datetime.now().strftime('%I:%M:%S %p')})! Triggering check-in...")
         try:
+            users = load_users()
             res = run_attendance(
+                users=users,
                 action="check-in",
                 headless=not headed,
                 force=False

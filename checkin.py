@@ -2,14 +2,17 @@
 """
 Office Tracker — Automated Check-In & Check-Out Automation with Playwright
 Features:
+  - Multiple users, checked in concurrently (see users.json.example)
   - Weekday only (skips Saturday and Sunday)
-  - Randomized time window (between 09:30 AM and 09:45 AM)
+  - Randomized time window (between 09:30 AM and 09:45 AM), shared by all users
   - Automatic Office Geolocation spoofing (matches TechGy office premises)
   - Safe check-in (prevents duplicate checkout if already working)
 """
 
 import argparse
-from datetime import datetime, time as dtime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+import json
 import os
 import random
 import re
@@ -23,8 +26,6 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 load_dotenv()
 
 DEFAULT_URL = os.getenv("PORTAL_URL", "https://office-tracker-1.vercel.app/login")
-DEFAULT_EMAIL = os.getenv("OFFICE_EMAIL")
-DEFAULT_PASSWORD = os.getenv("OFFICE_PASSWORD")
 
 # TechGy Office premises coordinates (reverse engineered from portal geofence)
 DEFAULT_LATITUDE = float(os.getenv("OFFICE_LATITUDE", "17.4835258"))
@@ -62,6 +63,49 @@ def log_schedule(msg: str):
     print(f"{Style.MAGENTA}{Style.BOLD}[SCHEDULE]{Style.RESET} {msg}")
 
 
+class Logger:
+    """Per-user logger: prefixes every line with the user's label so parallel output stays readable."""
+
+    def __init__(self, label: str):
+        self.prefix = f"{Style.BOLD}[{label}]{Style.RESET} "
+
+    def info(self, msg): print(f"{self.prefix}{Style.CYAN}[INFO]{Style.RESET} {msg}")
+    def success(self, msg): print(f"{self.prefix}{Style.GREEN}{Style.BOLD}[SUCCESS]{Style.RESET} {msg}")
+    def warn(self, msg): print(f"{self.prefix}{Style.YELLOW}[WARNING]{Style.RESET} {msg}")
+    def error(self, msg): print(f"{self.prefix}{Style.RED}{Style.BOLD}[ERROR]{Style.RESET} {msg}")
+
+
+def load_users() -> list:
+    """
+    Loads the accounts to check in, as a list of {"name", "email", "password"} dicts.
+    Source priority:
+      1. OFFICE_USERS env var - a JSON array (used for the GitHub Actions secret).
+      2. users.json file (or OFFICE_USERS_FILE path) - convenient for local runs.
+    See users.json.example for the expected format.
+    """
+    raw_json = os.getenv("OFFICE_USERS")
+    source = "OFFICE_USERS environment variable"
+
+    if not raw_json:
+        users_file = Path(os.getenv("OFFICE_USERS_FILE", "users.json"))
+        source = str(users_file)
+        if not users_file.exists():
+            return []
+        raw_json = users_file.read_text()
+
+    try:
+        users = json.loads(raw_json)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Could not parse user list from {source}: {e}")
+
+    for u in users:
+        if not u.get("email") or not u.get("password"):
+            raise SystemExit(f"Each user entry needs a non-empty 'email' and 'password'. Bad entry: {u}")
+        u.setdefault("name", u["email"])
+
+    return users
+
+
 def is_weekend(check_date: datetime = None) -> bool:
     """Returns True if given date is Saturday (5) or Sunday (6)."""
     if check_date is None:
@@ -95,6 +139,7 @@ def get_random_checkin_datetime(base_date: datetime = None) -> datetime:
 def wait_for_random_window():
     """
     Waits until the randomized daily window if currently before the window.
+    Called once per run (not per user), so every user hits the portal together.
     """
     now = datetime.now()
     target = get_random_checkin_datetime(now)
@@ -110,58 +155,38 @@ def wait_for_random_window():
         log_info(f"Current time ({now.strftime('%I:%M:%S %p')}) is past or inside the randomized target window ({target.strftime('%I:%M:%S %p')}). Proceeding immediately.")
 
 
-def run_attendance(
-    action: str = "check-in",
-    url: str = DEFAULT_URL,
-    email: str = DEFAULT_EMAIL,
-    password: str = DEFAULT_PASSWORD,
-    latitude: float = DEFAULT_LATITUDE,
-    longitude: float = DEFAULT_LONGITUDE,
-    headless: bool = True,
-    slow_mo: int = 0,
-    force: bool = False,
-    random_window: bool = False,
-    screenshot_dir: str = "screenshots"
+def perform_action(
+    action: str,
+    url: str,
+    email: str,
+    password: str,
+    latitude: float,
+    longitude: float,
+    headless: bool,
+    slow_mo: int,
+    screenshot_dir: str,
+    label: str,
 ) -> dict:
     """
-    Automates login and check-in / check-out / status on Office Tracker.
+    Runs one browser session: login + check-in / check-out / status, for a single user.
+    Safe to run concurrently with other calls to this function (each gets its own browser).
     """
-    if not email or not password:
-        raise SystemExit(
-            "OFFICE_EMAIL / OFFICE_PASSWORD are not set. "
-            "Create a .env file from .env.example (locally) or set them as "
-            "repository secrets (in CI) before running this script."
-        )
-
-    now = datetime.now()
-    day_name = now.strftime("%A")
-
-    # 1. Weekend Guard
-    if action == "check-in" and is_weekend(now) and not force:
-        log_warn(f"Today is {day_name} (Weekend). Check-in skipped as configured.")
-        log_info("Tip: Use --force flag if you want to bypass weekend skip during testing.")
-        return {
-            "success": True,
-            "status": f"Skipped ({day_name})",
-            "message": f"Check-in skipped on weekend ({day_name}).",
-            "screenshot": ""
-        }
-
-    # 2. Random Time Window Guard
-    if action == "check-in" and random_window and not force:
-        wait_for_random_window()
+    logger = Logger(label)
+    safe_label = re.sub(r"[^A-Za-z0-9_.-]", "_", label)
 
     screenshots_path = Path(screenshot_dir)
     screenshots_path.mkdir(parents=True, exist_ok=True)
 
-    log_info(f"Target URL: {url}")
-    log_info(f"User Email: {email}")
-    log_info(f"Action: {action.upper()}")
-    log_info(f"Office Location Spoof: Lat={latitude}, Lng={longitude}")
-    log_info(f"Headless Mode: {headless}")
+    logger.info(f"Target URL: {url}")
+    logger.info(f"User Email: {email}")
+    logger.info(f"Action: {action.upper()}")
+    logger.info(f"Office Location Spoof: Lat={latitude}, Lng={longitude}")
+    logger.info(f"Headless Mode: {headless}")
 
     result = {
         "success": False,
+        "label": label,
+        "email": email,
         "action": action,
         "status": "Unknown",
         "message": "",
@@ -182,17 +207,17 @@ def run_attendance(
 
         try:
             # 1. Open Portal Login Page
-            log_info("Opening portal...")
+            logger.info("Opening portal...")
             page.goto(url, wait_until="networkidle", timeout=30000)
 
             # 2. Select Employee Portal
-            log_info("Selecting 'Employee Portal'...")
+            logger.info("Selecting 'Employee Portal'...")
             portal_card = page.locator(".portal-card", has_text="Employee Portal").first
             portal_card.wait_for(state="visible", timeout=10000)
             portal_card.click()
 
             # 3. Enter Credentials
-            log_info("Entering credentials...")
+            logger.info("Entering credentials...")
             email_field = page.locator("input[type='email']")
             email_field.wait_for(state="visible", timeout=5000)
             email_field.fill(email)
@@ -202,12 +227,12 @@ def run_attendance(
             password_field.fill(password)
 
             # 4. Click Sign In
-            log_info("Signing in...")
+            logger.info("Signing in...")
             sign_in_btn = page.locator("button", has_text="Sign In").first
             sign_in_btn.click()
 
             # 5. Wait for Employee Dashboard
-            log_info("Waiting for dashboard to load...")
+            logger.info("Waiting for dashboard to load...")
             page.wait_for_url("**/employee**", timeout=15000)
             page.wait_for_load_state("networkidle", timeout=10000)
             time.sleep(1)
@@ -223,7 +248,7 @@ def run_attendance(
             except Exception:
                 pass
 
-            log_info(f"Logged in as: {Style.BOLD}{employee_name}{Style.RESET}")
+            logger.info(f"Logged in as: {Style.BOLD}{employee_name}{Style.RESET}")
 
             # 7. Locate Action Button & Status
             check_regex = re.compile(r"Check\s*(In|Out)", re.IGNORECASE)
@@ -237,13 +262,13 @@ def run_attendance(
             if status_badge_loc.count() > 0:
                 status_badge = status_badge_loc.inner_text().strip()
 
-            log_info(f"Current UI Button: [{btn_text}] | Current Status: [{status_badge}]")
+            logger.info(f"Current UI Button: [{btn_text}] | Current Status: [{status_badge}]")
 
             # Execute desired action
             if action == "status":
-                screenshot_file = screenshots_path / "status.png"
+                screenshot_file = screenshots_path / f"status_{safe_label}.png"
                 page.screenshot(path=str(screenshot_file))
-                log_success(f"Status Checked: Button is '{btn_text}', Status is '{status_badge}'")
+                logger.success(f"Status Checked: Button is '{btn_text}', Status is '{status_badge}'")
                 result.update({
                     "success": True,
                     "status": status_badge,
@@ -254,14 +279,14 @@ def run_attendance(
 
             elif action == "check-in":
                 if "Check In" in btn_text:
-                    log_info("Clicking 'Check In' button with office location...")
+                    logger.info("Clicking 'Check In' button with office location...")
                     action_btn.click()
                     page.wait_for_timeout(1000)
 
                     # Check if the in-page "Location Access Required" modal appears
                     allow_modal_btn = page.locator("button:visible", has_text="Allow Now").first
                     if allow_modal_btn.count() > 0:
-                        log_info("Detected 'Location Access Required' modal. Clicking 'Allow Now'...")
+                        logger.info("Detected 'Location Access Required' modal. Clicking 'Allow Now'...")
                         allow_modal_btn.click()
                         page.wait_for_timeout(3000)
 
@@ -272,9 +297,9 @@ def run_attendance(
                     if action_btn.count() > 0:
                         new_btn_text = action_btn.inner_text().strip()
 
-                    screenshot_file = screenshots_path / f"checkin_success_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    screenshot_file = screenshots_path / f"checkin_success_{safe_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                     page.screenshot(path=str(screenshot_file))
-                    log_success(f"Check-In completed successfully! New button state: '{new_btn_text}'")
+                    logger.success(f"Check-In completed successfully! New button state: '{new_btn_text}'")
                     result.update({
                         "success": True,
                         "status": "Checked In",
@@ -283,9 +308,9 @@ def run_attendance(
                         "screenshot": str(screenshot_file)
                     })
                 elif "Check Out" in btn_text:
-                    screenshot_file = screenshots_path / "already_checked_in.png"
+                    screenshot_file = screenshots_path / f"already_checked_in_{safe_label}.png"
                     page.screenshot(path=str(screenshot_file))
-                    log_warn(f"Already Checked In! (Button currently shows '{btn_text}', Status: '{status_badge}')")
+                    logger.warn(f"Already Checked In! (Button currently shows '{btn_text}', Status: '{status_badge}')")
                     result.update({
                         "success": True,
                         "status": "Already Checked In",
@@ -294,8 +319,8 @@ def run_attendance(
                         "screenshot": str(screenshot_file)
                     })
                 else:
-                    log_error(f"Could not locate Check In button. Button text found: '{btn_text}'")
-                    screenshot_file = screenshots_path / "checkin_error.png"
+                    logger.error(f"Could not locate Check In button. Button text found: '{btn_text}'")
+                    screenshot_file = screenshots_path / f"checkin_error_{safe_label}.png"
                     page.screenshot(path=str(screenshot_file))
                     result.update({
                         "success": False,
@@ -305,19 +330,19 @@ def run_attendance(
 
             elif action == "check-out":
                 if "Check Out" in btn_text:
-                    log_info("Clicking 'Check Out' button...")
+                    logger.info("Clicking 'Check Out' button...")
                     action_btn.click()
                     page.wait_for_timeout(2000)
 
                     confirm_btn = page.locator("button:visible:has-text('Confirm'), button:visible:has-text('Yes')").first
                     if confirm_btn.count() > 0:
-                        log_info("Confirming checkout modal...")
+                        logger.info("Confirming checkout modal...")
                         confirm_btn.click()
                         page.wait_for_timeout(1000)
 
-                    screenshot_file = screenshots_path / "checkout_success.png"
+                    screenshot_file = screenshots_path / f"checkout_success_{safe_label}.png"
                     page.screenshot(path=str(screenshot_file))
-                    log_success("Check-Out completed successfully!")
+                    logger.success("Check-Out completed successfully!")
                     result.update({
                         "success": True,
                         "status": "Checked Out",
@@ -325,9 +350,9 @@ def run_attendance(
                         "screenshot": str(screenshot_file)
                     })
                 elif "Check In" in btn_text:
-                    screenshot_file = screenshots_path / "already_checked_out.png"
+                    screenshot_file = screenshots_path / f"already_checked_out_{safe_label}.png"
                     page.screenshot(path=str(screenshot_file))
-                    log_warn(f"Already Checked Out! (Button currently shows '{btn_text}')")
+                    logger.warn(f"Already Checked Out! (Button currently shows '{btn_text}')")
                     result.update({
                         "success": True,
                         "status": "Already Checked Out",
@@ -337,8 +362,8 @@ def run_attendance(
                     })
 
         except PlaywrightTimeoutError as te:
-            log_error(f"Playwright operation timed out: {te}")
-            err_screenshot = screenshots_path / "timeout_error.png"
+            logger.error(f"Playwright operation timed out: {te}")
+            err_screenshot = screenshots_path / f"timeout_error_{safe_label}.png"
             try:
                 page.screenshot(path=str(err_screenshot))
                 result["screenshot"] = str(err_screenshot)
@@ -347,8 +372,8 @@ def run_attendance(
             result["message"] = str(te)
 
         except Exception as e:
-            log_error(f"An unexpected error occurred: {e}")
-            err_screenshot = screenshots_path / "general_error.png"
+            logger.error(f"An unexpected error occurred: {e}")
+            err_screenshot = screenshots_path / f"general_error_{safe_label}.png"
             try:
                 page.screenshot(path=str(err_screenshot))
                 result["screenshot"] = str(err_screenshot)
@@ -362,9 +387,95 @@ def run_attendance(
     return result
 
 
+def run_attendance(
+    users: list,
+    action: str = "check-in",
+    url: str = DEFAULT_URL,
+    latitude: float = DEFAULT_LATITUDE,
+    longitude: float = DEFAULT_LONGITUDE,
+    headless: bool = True,
+    slow_mo: int = 0,
+    force: bool = False,
+    random_window: bool = False,
+    screenshot_dir: str = "screenshots",
+    max_workers: int = None,
+) -> dict:
+    """
+    Runs the given action for every user in `users`, in parallel (one browser per user),
+    so everyone checks in together instead of one-by-one.
+    """
+    if not users:
+        raise SystemExit(
+            "No users configured. Set the OFFICE_USERS environment variable (JSON array) "
+            "or create users.json from users.json.example before running this script."
+        )
+
+    now = datetime.now()
+    day_name = now.strftime("%A")
+
+    # 1. Weekend Guard (checked once for the whole group)
+    if action == "check-in" and is_weekend(now) and not force:
+        log_warn(f"Today is {day_name} (Weekend). Check-in skipped as configured.")
+        log_info("Tip: Use --force flag if you want to bypass weekend skip during testing.")
+        return {
+            "success": True,
+            "status": f"Skipped ({day_name})",
+            "message": f"Check-in skipped on weekend ({day_name}).",
+            "results": [],
+        }
+
+    # 2. Random Time Window Guard (waited once, shared by every user)
+    if action == "check-in" and random_window and not force:
+        wait_for_random_window()
+
+    log_info(f"Running '{action}' for {len(users)} user(s) in parallel...")
+
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers or len(users)) as executor:
+        future_to_user = {
+            executor.submit(
+                perform_action,
+                action=action,
+                url=url,
+                email=u["email"],
+                password=u["password"],
+                latitude=latitude,
+                longitude=longitude,
+                headless=headless,
+                slow_mo=slow_mo,
+                screenshot_dir=screenshot_dir,
+                label=u["name"],
+            ): u
+            for u in users
+        }
+        for future in as_completed(future_to_user):
+            u = future_to_user[future]
+            try:
+                results.append(future.result())
+            except Exception as e:
+                log_error(f"[{u['name']}] Unhandled error: {e}")
+                results.append({
+                    "success": False,
+                    "label": u["name"],
+                    "email": u["email"],
+                    "action": action,
+                    "status": "Error",
+                    "message": str(e),
+                    "screenshot": "",
+                })
+
+    succeeded = sum(1 for r in results if r["success"])
+    return {
+        "success": all(r["success"] for r in results),
+        "status": "Completed",
+        "message": f"{succeeded}/{len(results)} succeeded",
+        "results": results,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Office Tracker Automated Check-In & Check-Out Automation"
+        description="Office Tracker Automated Check-In & Check-Out Automation (multi-user)"
     )
     parser.add_argument(
         "--action",
@@ -376,16 +487,6 @@ def main():
         "--url",
         default=DEFAULT_URL,
         help="Portal URL"
-    )
-    parser.add_argument(
-        "--email",
-        default=DEFAULT_EMAIL,
-        help="Employee login email"
-    )
-    parser.add_argument(
-        "--password",
-        default=DEFAULT_PASSWORD,
-        help="Employee login password"
     )
     parser.add_argument(
         "--latitude",
@@ -402,7 +503,7 @@ def main():
     parser.add_argument(
         "--headed",
         action="store_true",
-        help="Run browser in visible mode (default: headless)"
+        help="Run browsers in visible mode (default: headless)"
     )
     parser.add_argument(
         "--slow-mo",
@@ -425,31 +526,41 @@ def main():
         default="screenshots",
         help="Directory to save execution screenshots"
     )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Max browsers to run at once (default: one per user, fully parallel)"
+    )
 
     args = parser.parse_args()
 
+    users = load_users()
+
     result = run_attendance(
+        users=users,
         action=args.action,
         url=args.url,
-        email=args.email,
-        password=args.password,
         latitude=args.latitude,
         longitude=args.longitude,
         headless=not args.headed,
         slow_mo=args.slow_mo,
         force=args.force,
         random_window=args.random_window,
-        screenshot_dir=args.screenshot_dir
+        screenshot_dir=args.screenshot_dir,
+        max_workers=args.max_workers,
     )
 
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 60)
     print("Execution Summary:")
-    print(f"  • Action:     {result.get('action')}")
-    print(f"  • Status:     {result.get('status')}")
-    print(f"  • Message:    {result.get('message')}")
-    if result.get("screenshot"):
-        print(f"  • Screenshot: {result.get('screenshot')}")
-    print("=" * 50)
+    print(f"  • Status:  {result.get('status')}")
+    print(f"  • Message: {result.get('message')}")
+    for r in result.get("results", []):
+        marker = "OK  " if r.get("success") else "FAIL"
+        print(f"  [{marker}] {r.get('label')}: {r.get('status')} - {r.get('message')}")
+        if r.get("screenshot"):
+            print(f"           screenshot: {r.get('screenshot')}")
+    print("=" * 60)
 
     if not result.get("success"):
         sys.exit(1)

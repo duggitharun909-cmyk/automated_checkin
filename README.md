@@ -6,25 +6,29 @@ Python Playwright automation script for **TechGy Innovations Office Tracker** (`
 
 ## 🚀 Key Features
 
-1. **Weekend Skip**:
+1. **Multiple Users, Checked In Together**:
+   - Configure any number of accounts in `users.json` (see `users.json.example`).
+   - All of them are checked in **in parallel** (one browser per user), so nobody's check-in lags behind because they were later in a list.
+
+2. **Weekend Skip**:
    - Automatically excludes **Saturdays and Sundays** from check-in.
    - Runs exclusively on workdays (Monday through Friday).
    - Use `--force` to test or override on weekends if needed.
 
-2. **Randomized Daily Check-In Window (09:30 AM – 09:45 AM)**:
+3. **Randomized Daily Check-In Window (09:30 AM – 09:45 AM)**:
    - Eliminates predictable patterns. Every single day a random time is chosen (e.g. 09:23:41 AM, 09:37:12 AM, 09:28:05 AM).
-   - No two days will have the exact same check-in timestamp.
+   - No two days will have the exact same check-in timestamp. The random time is picked **once per run** and shared by every user, so the whole team checks in together.
 
-3. **Office Location Emulation (Geofencing)**:
+4. **Office Location Emulation (Geofencing)**:
    - The portal enforces a 2000m radius check around the office (`Lat 17.4835258`, `Lng 78.3808618`).
    - Automatically injects office coordinates and grants geolocation permissions in Playwright so check-in passes reliably anywhere.
 
-4. **Safety & Duplicate Protection**:
-   - Detects if you are already checked in (`Working` status).
-   - Will **not** accidentally check you out if you trigger the check-in script while already working.
+5. **Safety & Duplicate Protection**:
+   - Detects if a user is already checked in (`Working` status).
+   - Will **not** accidentally check anyone out if the check-in script is triggered while they're already working.
 
-5. **Screenshots & Reporting**:
-   - Takes timestamped screenshots of every execution into `screenshots/`.
+6. **Screenshots & Reporting**:
+   - Takes a timestamped screenshot per user, per execution, into `screenshots/`.
 
 ---
 
@@ -32,13 +36,15 @@ Python Playwright automation script for **TechGy Innovations Office Tracker** (`
 
 ```
 Automating_Checkin/
-├── .env                # Credentials & office coordinates (keep secret)
-├── .env.example        # Configuration template
-├── .gitignore          # Excludes .env, virtual environments & logs
-├── requirements.txt    # Dependencies (playwright, python-dotenv)
-├── checkin.py          # Core Playwright automation script
-├── scheduler.py        # Background daily scheduler daemon
-└── screenshots/        # Auto-saved verification screenshots
+├── .env                # Shared settings: portal URL, office coordinates, window (keep secret)
+├── .env.example         # Configuration template
+├── users.json           # Per-user logins - name/email/password list (keep secret, gitignored)
+├── users.json.example   # users.json template
+├── .gitignore           # Excludes .env, users.json, virtual environments & logs
+├── requirements.txt     # Dependencies (playwright, python-dotenv)
+├── checkin.py           # Core Playwright automation script (multi-user, parallel)
+├── scheduler.py         # Background daily scheduler daemon
+└── screenshots/         # Auto-saved verification screenshots, one per user per run
 ```
 
 ---
@@ -61,13 +67,11 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-### 2. Configure `.env`
+### 2. Configure `.env` (shared settings)
 
 Copy `.env.example` to `.env` and fill in your own values (never commit this file):
 ```env
 PORTAL_URL=https://office-tracker-1.vercel.app/login
-OFFICE_EMAIL=your_email@example.com
-OFFICE_PASSWORD=your_password_here
 
 OFFICE_LATITUDE=17.4835258
 OFFICE_LONGITUDE=78.3808618
@@ -75,6 +79,19 @@ OFFICE_LONGITUDE=78.3808618
 CHECKIN_WINDOW_START=09:30
 CHECKIN_WINDOW_END=09:45
 ```
+
+### 3. Configure `users.json` (one entry per person)
+
+Copy `users.json.example` to `users.json` and fill in real accounts (never commit this file):
+```json
+[
+  { "name": "alice", "email": "alice@example.com", "password": "her_password" },
+  { "name": "bob", "email": "bob@example.com", "password": "his_password" }
+]
+```
+Every user in this file is checked in **in parallel** whenever `checkin.py` runs. `name` is just a label used in logs/screenshots (defaults to the email if omitted).
+
+In CI (GitHub Actions), skip the file and set an `OFFICE_USERS` secret containing the same JSON as a single line instead - see `githubsetup.md`.
 
 ---
 

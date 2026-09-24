@@ -6,6 +6,7 @@ venv/
 # Environment credentials (CRITICAL: Do not commit passwords)
 .env
 .env.local
+users.json
 
 # Python cache & artifacts
 __pycache__/

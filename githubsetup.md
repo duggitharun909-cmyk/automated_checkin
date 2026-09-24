@@ -1,22 +1,19 @@
 # GitHub + cron-jobs.org Setup Guide
 
-Goal: run `checkin.py` automatically every weekday, at a random time between **09:30 and 09:45**, without your laptop needing to be on.
+Goal: run `checkin.py` automatically every weekday, without your laptop needing to be on. The check-in happens **immediately** whenever the workflow is triggered - there's no internal waiting or randomized window. Whatever time you set in cron-jobs.org is the check-in time.
 
 ## How it works
 
 ```
-cron-jobs.org  --(HTTPS POST, ~09:25)-->  GitHub Actions API
+cron-jobs.org  --(HTTPS POST, at whatever time you configure)-->  GitHub Actions API
                                                   |
                                                   v
                                     workflow_dispatch triggers checkin.yml
                                                   |
                                                   v
-                              checkin.py --random-window runs in the cloud,
-                              internally waits until a random second between
-                              09:30-09:45, then performs the check-in
+                              checkin.py runs immediately in the cloud
+                              and performs the check-in for every user
 ```
-
-cron-jobs.org only needs to fire once a day, a few minutes before the window opens. The randomization inside `checkin.py` (the `--random-window` flag, using `CHECKIN_WINDOW_START` / `CHECKIN_WINDOW_END`) is what actually picks the random check-in second each day. This is more reliable than trying to schedule cron-jobs.org itself at a random time, and it reuses code you already have.
 
 GitHub Actions runs Linux/Chromium in the cloud, so headless mode works there without any browser-download issues.
 
@@ -64,17 +61,22 @@ git push origin main
 
 ## 3. Add repository secrets
 
-GitHub repo -> **Settings** -> **Secrets and variables** -> **Actions** -> **New repository secret**. Add each of these (values come from your local `.env` file):
+GitHub repo -> **Settings** -> **Secrets and variables** -> **Actions** -> **New repository secret**. Add each of these:
 
 | Secret name | Example value |
 |---|---|
 | `PORTAL_URL` | `https://office-tracker-1.vercel.app/login` |
-| `OFFICE_EMAIL` | your login email |
-| `OFFICE_PASSWORD` | your (rotated) password |
+| `OFFICE_USERS` | see below - one JSON secret holding every account |
 | `OFFICE_LATITUDE` | `17.4835258` |
 | `OFFICE_LONGITUDE` | `78.3808618` |
-| `CHECKIN_WINDOW_START` | `09:30` |
-| `CHECKIN_WINDOW_END` | `09:45` |
+
+**`OFFICE_USERS`** replaces individual email/password secrets now that the script supports multiple accounts, all checked in **in parallel** (see `users.json.example` for the local-dev equivalent). Its value is a single-line JSON array:
+
+```json
+[{"name":"alice","email":"alice@example.com","password":"her_password"},{"name":"bob","email":"bob@example.com","password":"his_password"}]
+```
+
+Paste that whole line as the secret's value (adjust names/emails/passwords for your real accounts). Add or remove people later by editing this one secret - no workflow or code change needed.
 
 Secrets are encrypted, never shown again after saving, and are not visible in logs.
 
@@ -85,8 +87,8 @@ Secrets are encrypted, never shown again after saving, and are not visible in lo
 Before wiring up cron-jobs.org, confirm it works on its own:
 
 1. Repo page -> **Actions** tab -> **Office Check-In** workflow -> **Run workflow** -> **Run workflow** (green button).
-2. Watch the run. It should log in, wait a few seconds/minutes (random window), and check in - or report "Already Checked In" if you already are.
-3. Open the run -> **checkin-screenshot** artifact to download the screenshot and confirm visually.
+2. Watch the run. It should log in and check in immediately for every user in `OFFICE_USERS` - or report "Already Checked In" per user if already checked in.
+3. Open the run -> **checkin-screenshot** artifact to download each user's screenshot and confirm visually.
 
 If it fails, click into the failed step and read the error - almost always a missing/incorrect secret.
 
@@ -126,7 +128,7 @@ Store it somewhere safe (password manager). Treat it like a password.
    ```json
    {"ref":"main"}
    ```
-8. **Schedule**: every weekday (Mon-Fri), once daily at **09:25** in your local timezone - set the timezone explicitly in cron-jobs.org's settings (e.g. `Asia/Kolkata`) so it doesn't default to UTC. 09:25 gives a 5-minute buffer before the 09:30 window opens, covering cron-jobs.org's own scheduling jitter.
+8. **Schedule**: every weekday (Mon-Fri), once daily at whatever time you want the check-in to actually happen (e.g. **09:35**) - set the timezone explicitly in cron-jobs.org's settings (e.g. `Asia/Kolkata`) so it doesn't default to UTC. This is the real check-in time now, not a buffer before one - there's no waiting once the workflow starts.
 9. Save and enable the job.
 
 A successful trigger returns HTTP `204 No Content` with an empty body - that's correct, not an error. cron-jobs.org's execution history will show the response code for each run so you can confirm it's firing.
