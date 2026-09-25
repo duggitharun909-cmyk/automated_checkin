@@ -196,7 +196,9 @@ def perform_action(
                 remaining -= chunk
                 if remaining > 0:
                     logger.info(f"Still waiting for {wait_until.strftime('%I:%M:%S %p')}... {int(remaining // 60)}m {int(remaining % 60)}s remaining")
-        logger.info(f"Target time reached ({now_local().strftime('%I:%M:%S %p')}). Proceeding...")
+            logger.info(f"Target time reached ({now_local().strftime('%I:%M:%S %p')}). Proceeding...")
+        else:
+            logger.info(f"Assigned check-in time {wait_until.strftime('%I:%M:%S %p')} has already passed (now {now.strftime('%I:%M:%S %p')}) - proceeding immediately without waiting.")
 
     screenshots_path = Path(screenshot_dir)
     screenshots_path.mkdir(parents=True, exist_ok=True)
