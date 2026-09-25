@@ -84,6 +84,8 @@ Paste that whole line as the secret's value (adjust names/emails/passwords for y
 
 Secrets are encrypted, never shown again after saving, and are not visible in logs.
 
+**Timezone gotcha:** GitHub-hosted runners run their system clock in **UTC**, not IST. `checkin.py` anchors every time comparison to `OFFICE_TIMEZONE` (an env var, hardcoded to `Asia/Kolkata` in `checkin.yml`) instead of the runner's own clock, so `CHECKIN_WINDOW_START`/`END` are always interpreted as office-local time regardless of what timezone the machine running the script is in. If you ever see the workflow abort with something like "window ends at 09:48, which is 347 minutes away" right after a 9:30 AM IST trigger, that's this exact class of bug resurfacing - check that `OFFICE_TIMEZONE` is still set to `Asia/Kolkata` in the workflow and that `checkin.py`'s comparisons still go through `now_local()`, not a bare `datetime.now()`.
+
 ---
 
 ## 4. Test the workflow manually

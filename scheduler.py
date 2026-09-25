@@ -18,6 +18,7 @@ from checkin import (
     run_attendance,
     load_users,
     is_weekend,
+    now_local,
     WINDOW_START_STR,
     WINDOW_END_STR,
     DEFAULT_LATITUDE,
@@ -51,7 +52,7 @@ def get_next_run_datetime(from_time: datetime = None) -> datetime:
     Otherwise advances to the next weekday (Monday-Friday) and returns its randomized target.
     """
     if from_time is None:
-        from_time = datetime.now()
+        from_time = now_local()
 
     # If today is weekday
     if not is_weekend(from_time):
@@ -76,7 +77,7 @@ def start_scheduler(headed: bool = False):
     print("=" * 60)
 
     while True:
-        now = datetime.now()
+        now = now_local()
 
         if is_weekend(now):
             next_run = get_next_run_datetime(now)
@@ -103,7 +104,7 @@ def start_scheduler(headed: bool = False):
             time.sleep(wait_seconds)
 
         # Trigger check-in
-        print(f"\n{Style.GREEN}{Style.BOLD}[ALARM]{Style.RESET} Check-in time reached ({datetime.now().strftime('%I:%M:%S %p')})! Triggering check-in...")
+        print(f"\n{Style.GREEN}{Style.BOLD}[ALARM]{Style.RESET} Check-in time reached ({now_local().strftime('%I:%M:%S %p')})! Triggering check-in...")
         try:
             users = load_users()
             res = run_attendance(
@@ -129,7 +130,7 @@ def main():
 
     if args.preview:
         print("\n📅 Preview of next 7 days check-in schedule:")
-        cur = datetime.now()
+        cur = now_local()
         for i in range(7):
             d = cur + timedelta(days=i)
             day_str = d.strftime("%A, %b %d")

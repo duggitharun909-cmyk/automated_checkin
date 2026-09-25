@@ -13,6 +13,7 @@ Features:
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import json
 import os
 import random
@@ -36,11 +37,21 @@ DEFAULT_LONGITUDE = float(os.getenv("OFFICE_LONGITUDE") or "78.3808618")
 WINDOW_START_STR = os.getenv("CHECKIN_WINDOW_START") or "09:32"
 WINDOW_END_STR = os.getenv("CHECKIN_WINDOW_END") or "09:48"
 
+# All check-in times are anchored to this timezone, NOT the machine's local clock -
+# GitHub Actions runners run in UTC, so comparing against naive datetime.now() would
+# silently misread the window (e.g. 09:32 IST window checked against a UTC clock).
+OFFICE_TZ = ZoneInfo(os.getenv("OFFICE_TIMEZONE") or "Asia/Kolkata")
+
 # Safety cap: refuse to start waiting if it would take longer than this (likely misconfiguration)
 MAX_WAIT_MINUTES = int(os.getenv("MAX_WAIT_MINUTES") or "30")
 
 # How often to print a "still waiting" countdown line while a user's thread waits
 WAIT_LOG_INTERVAL_SECONDS = 60
+
+
+def now_local() -> datetime:
+    """Current time in OFFICE_TZ, regardless of what timezone the host machine is set to."""
+    return datetime.now(OFFICE_TZ)
 
 
 class Style:
@@ -116,7 +127,7 @@ def load_users() -> list:
 def is_weekend(check_date: datetime = None) -> bool:
     """Returns True if given date is Saturday (5) or Sunday (6)."""
     if check_date is None:
-        check_date = datetime.now()
+        check_date = now_local()
     return check_date.weekday() in (5, 6)
 
 
@@ -127,7 +138,7 @@ def assign_unique_checkin_times(count: int, base_date: datetime = None) -> list:
     user, so no two users land on the exact same second.
     """
     if base_date is None:
-        base_date = datetime.now()
+        base_date = now_local()
 
     sh, sm = map(int, WINDOW_START_STR.split(":"))
     eh, em = map(int, WINDOW_END_STR.split(":"))
@@ -173,7 +184,7 @@ def perform_action(
     safe_label = re.sub(r"[^A-Za-z0-9_.-]", "_", label)
 
     if wait_until:
-        now = datetime.now()
+        now = now_local()
         if now < wait_until:
             wait_seconds = (wait_until - now).total_seconds()
             logger.info(f"Assigned check-in time: {Style.BOLD}{wait_until.strftime('%I:%M:%S %p')}{Style.RESET} (waiting {int(wait_seconds // 60)}m {int(wait_seconds % 60)}s)...")
@@ -185,7 +196,7 @@ def perform_action(
                 remaining -= chunk
                 if remaining > 0:
                     logger.info(f"Still waiting for {wait_until.strftime('%I:%M:%S %p')}... {int(remaining // 60)}m {int(remaining % 60)}s remaining")
-        logger.info(f"Target time reached ({datetime.now().strftime('%I:%M:%S %p')}). Proceeding...")
+        logger.info(f"Target time reached ({now_local().strftime('%I:%M:%S %p')}). Proceeding...")
 
     screenshots_path = Path(screenshot_dir)
     screenshots_path.mkdir(parents=True, exist_ok=True)
@@ -310,7 +321,7 @@ def perform_action(
                     if action_btn.count() > 0:
                         new_btn_text = action_btn.inner_text().strip()
 
-                    screenshot_file = screenshots_path / f"checkin_success_{safe_label}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                    screenshot_file = screenshots_path / f"checkin_success_{safe_label}_{now_local().strftime('%Y%m%d_%H%M%S')}.png"
                     page.screenshot(path=str(screenshot_file))
                     logger.success(f"Check-In completed successfully! New button state: '{new_btn_text}'")
                     result.update({
@@ -425,7 +436,7 @@ def run_attendance(
             "or create users.json from users.json.example before running this script."
         )
 
-    now = datetime.now()
+    now = now_local()
     day_name = now.strftime("%A")
 
     # 1. Weekend Guard (checked once for the whole group)
